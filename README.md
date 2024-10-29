@@ -26,6 +26,7 @@ but `I think` there is no reason to ban the account, because this is not cheatin
 - Running Node
 - AutoLogin
 - AutoReconnect
+
 ![alt text](image-2.png)
 
 ## 📌  ScreenShot Running With Javascript/NodeJs
