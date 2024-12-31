@@ -23,8 +23,8 @@ let countdown = "Calculating...";
 let pointsTotal = 0;
 let pointsToday = 0;
 
-const authorization = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlra25uZ3JneHV4Z2pocGxicGV5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MjU0MzgxNTAsImV4cCI6MjA0MTAxNDE1MH0.DRAvf8nH1ojnJBc3rD_Nw6t1AV8X_g6gmY_HByG2Mag";
-const apikey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlra25uZ3JneHV4Z2pocGxicGV5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MjU0MzgxNTAsImV4cCI6MjA0MTAxNDE1MH0.DRAvf8nH1ojnJBc3rD_Nw6t1AV8X_g6gmY_HByG2Mag";
+const auth = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlra25uZ3JneHV4Z2pocGxicGV5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MjU0MzgxNTAsImV4cCI6MjA0MTAxNDE1MH0.DRAvf8nH1ojnJBc3rD_Nw6t1AV8X_g6gmY_HByG2Mag"
+const reffCode = "OwAG3kib1ivOJG4Y0OCZ8lJETa6ypvsDtGmdhcjA";
 
 const readFileAsync = promisify(fs.readFile);
 const writeFileAsync = promisify(fs.writeFile);
@@ -49,11 +49,11 @@ async function setLocalStorage(data) {
   await writeFileAsync('localStorage.json', JSON.stringify(newData));
 }
 
-async function connectWebSocket(userId, proxy) {
+async function connectWebSocket(token, proxy) {
   if (socket) return;
   const version = "v0.2";
   const url = "wss://secure.ws.teneo.pro";
-  const wsUrl = `${url}/websocket?userId=${encodeURIComponent(userId)}&version=${encodeURIComponent(version)}`;
+  const wsUrl = `${url}/websocket?accessToken=${encodeURIComponent(token)}&version=${encodeURIComponent(version)}`;
 
   const options = {};
   if (proxy) {
@@ -85,10 +85,14 @@ async function connectWebSocket(userId, proxy) {
     }
   };
 
+  let reconnectAttempts = 0;
   socket.onclose = () => {
     socket = null;
     console.log("WebSocket disconnected");
     stopPinging();
+    const delay = Math.min(1000 * 2 ** reconnectAttempts, 30000);
+    setTimeout(() => connectWebSocket(token, proxy), delay);
+    reconnectAttempts++;
   };
 
   socket.onerror = (error) => {
@@ -122,7 +126,7 @@ function stopPinging() {
 }
 
 process.on('SIGINT', () => {
-  console.log('Received SIGINT. Stopping pinging...');
+  console.log('Received SIGINT. Stopping pinging and disconnecting WebSocket...');
   stopPinging();
   disconnectWebSocket();
   process.exit(0);
@@ -131,11 +135,11 @@ process.on('SIGINT', () => {
 function startCountdownAndPoints() {
   clearInterval(countdownInterval);
   updateCountdownAndPoints();
-  countdownInterval = setInterval(updateCountdownAndPoints, 1000);
+  countdownInterval = setInterval(updateCountdownAndPoints, 60 * 1000); // 1 minute interval
 }
 
 async function updateCountdownAndPoints() {
-  const { lastUpdated } = await getLocalStorage();
+  const { lastUpdated, pointsTotal, pointsToday } = await getLocalStorage();
   if (lastUpdated) {
     const nextHeartbeat = new Date(lastUpdated);
     nextHeartbeat.setMinutes(nextHeartbeat.getMinutes() + 15);
@@ -168,13 +172,12 @@ async function updateCountdownAndPoints() {
     countdown = "Calculating...";
     potentialPoints = 0;
   }
-
+  console.log("Total Points:", pointsTotal, "| Today Points:", pointsToday, "| Countdown:", countdown);
   await setLocalStorage({ potentialPoints, countdown });
 }
 
 async function getUserId(proxy) {
-  const loginUrl = "https://ikknngrgxuxgjhplbpey.supabase.co/auth/v1/token?grant_type=password";
-  
+  const loginUrl = "https://auth.teneo.pro/api/login";
 
   rl.question('Email: ', (email) => {
     rl.question('Password: ', async (password) => {
@@ -184,26 +187,15 @@ async function getUserId(proxy) {
           password: password
         }, {
           headers: {
-            'Authorization': authorization,
-            'apikey': apikey
+            'x-api-key': reffCode
           }
         });
 
-        const userId = response.data.user.id;
-        console.log('User ID:', userId);
+        const access_token = response.data.access_token;
 
-        const profileUrl = `https://ikknngrgxuxgjhplbpey.supabase.co/rest/v1/profiles?select=personal_code&id=eq.${userId}`;
-        const profileResponse = await axios.get(profileUrl, {
-          headers: {
-            'Authorization': authorization,
-            'apikey': apikey
-          }
-        });
-
-        console.log('Profile Data:', profileResponse.data);
-        await setLocalStorage({ userId });
+        await setLocalStorage({ access_token });
         await startCountdownAndPoints();
-        await connectWebSocket(userId, proxy);
+        await connectWebSocket(access_token, proxy);
       } catch (error) {
         console.error('Error:', error.response ? error.response.data : error.message);
       } finally {
@@ -214,25 +206,40 @@ async function getUserId(proxy) {
 }
 
 async function registerUser() {
-  const signupUrl = "https://ikknngrgxuxgjhplbpey.supabase.co/auth/v1/signup";
+  const isExistUrl = 'https://auth.teneo.pro/api/check-user-exists';
+  const signupUrl = "https://node-b.teneo.pro/auth/v1/signup";
 
   rl.question('Enter your email: ', (email) => {
     rl.question('Enter your password: ', (password) => {
       rl.question('Enter invited_by code: ', async (invitedBy) => {
         try {
-          const response = await axios.post(signupUrl, {
-            email: email,
-            password: password,
-            data: { invited_by: "KGWku" },
-            gotrue_meta_security: {},
-            code_challenge: null,
-            code_challenge_method: null
-          },{
-          headers: {
-            'Authorization': authorization,
-            'apikey': apikey
+          const isExist = await axios.post(isExistUrl, { email: email }, {
+            headers: {
+              'x-api-key': reffCode
+            }
+          });
+
+          if (isExist && isExist.data && isExist.data.exists) {
+            console.log('User already exists, please just login with:', email);
+            return;
+          } else {
+            const response = await axios.post(signupUrl, {
+              email: email,
+              password: password,
+              data: { invited_by: invitedBy },
+              gotrue_meta_security: {},
+              code_challenge: null,
+              code_challenge_method: null
+            }, {
+              headers: {
+                'apikey': auth,
+                'Content-Type': 'application/json',
+                'authorization': `Bearer ${auth}`,
+                'x-client-info': 'supabase-js-web/2.47.10',
+                'x-supabase-api-version': '2024-01-01',
+              }
+            });
           }
-        });
 
           console.log('Registration successful Please Confirm your email at :', email);
         } catch (error) {
@@ -247,7 +254,7 @@ async function registerUser() {
 
 async function main() {
   const localStorageData = await getLocalStorage();
-  let userId = localStorageData.userId;
+  let access_token = localStorageData.access_token;
 
   rl.question('Do you want to use a proxy? (y/n): ', async (useProxy) => {
     let proxy = null;
@@ -259,8 +266,8 @@ async function main() {
       });
     }
 
-    if (!userId) {
-      rl.question('User ID not found. Would you like to:\n1. Register an account\n2. Login to your account\n3. Enter User ID manually\nChoose an option: ', async (option) => {
+    if (!access_token) {
+      rl.question('User ID not found. Would you like to:\n1. Register an account\n2. Login to your account\n3. Enter Token manually\nChoose an option: ', async (option) => {
         switch (option) {
           case '1':
             await registerUser();
@@ -269,11 +276,11 @@ async function main() {
             await getUserId(proxy);
             break;
           case '3':
-            rl.question('Please enter your user ID: ', async (inputUserId) => {
-              userId = inputUserId;
-              await setLocalStorage({ userId });
+            rl.question('Please enter your access token: ', async (accessToken) => {
+              userToken = accessToken;
+              await setLocalStorage({ userToken });
               await startCountdownAndPoints();
-              await connectWebSocket(userId, proxy);
+              await connectWebSocket(userToken, proxy);
               rl.close();
             });
             break;
@@ -287,14 +294,17 @@ async function main() {
         switch (option) {
           case '1':
             fs.unlink('localStorage.json', (err) => {
-              if (err) throw err;
+              if (err) {
+                console.error('Error deleting localStorage.json:', err.message);
+              } else {
+                console.log('Logged out successfully.');
+                process.exit(0);
+              }
             });
-            console.log('Logged out successfully.');
-            process.exit(0);
             break;
           case '2':
             await startCountdownAndPoints();
-            await connectWebSocket(userId, proxy);
+            await connectWebSocket(access_token, proxy);
             break;
           default:
             console.log('Invalid option. Exiting...');
