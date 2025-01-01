@@ -48,11 +48,21 @@ npm install
 node main.js
 ```
 ## run for multy accounts: 
-- Manual put token in `tokens.txt` and proxy (optional) in `proxies.txt`
+- Manual put token in `tokens.txt` 1 line 1 token
     ```bash
     nano tokens.txt
     ```
-- Auto get tokens: fill `accounts.txt` format : `test@gmail.com|password123` 1 line 1 account
+- proxy (optional) in `proxies.txt`
+    ```bash
+    nano proxies.txt
+    ```
+    
+### Auto get tokens: 
+- fill `accounts.txt` format : `test@gmail.com|password123` 1 line 1 account
+    ```bash
+    nano accounts.txt
+    ```
+- run to get tokens
     ```bash
     node getToken.js
     ```
