@@ -47,3 +47,11 @@ npm install
 ```bash
 node main.js
 ```
+- run for multy accounts: put token in `tokens.txt` proxy (optional) in `proxies.txt`
+    ```bash
+    nano tokens.txt
+    ```
+    - start multy accounts
+    ```bash
+    node multy.js
+    ```
