@@ -3,7 +3,6 @@ const { promisify } = require('util');
 const fs = require('fs');
 const readline = require('readline');
 const axios = require('axios');
-const HttpsProxyAgent = require('https-proxy-agent');
 const chalk = require('chalk');
 
 console.log(chalk.cyan.bold(`███████╗██╗     ██╗  ██╗     ██████╗██╗   ██╗██████╗ ███████╗██████╗`));
@@ -22,7 +21,6 @@ let potentialPoints = 0;
 let countdown = "Calculating...";
 let pointsTotal = 0;
 let pointsToday = 0;
-let retryDelay = 1000;
 
 const auth = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imlra25uZ3JneHV4Z2pocGxicGV5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3MjU0MzgxNTAsImV4cCI6MjA0MTAxNDE1MH0.DRAvf8nH1ojnJBc3rD_Nw6t1AV8X_g6gmY_HByG2Mag"
 const reffCode = "OwAG3kib1ivOJG4Y0OCZ8lJETa6ypvsDtGmdhcjA";
@@ -50,18 +48,13 @@ async function setLocalStorage(data) {
   await writeFileAsync('localStorage.json', JSON.stringify(newData));
 }
 
-async function connectWebSocket(token, proxy) {
+async function connectWebSocket(token) {
   if (socket) return;
   const version = "v0.2";
   const url = "wss://secure.ws.teneo.pro";
   const wsUrl = `${url}/websocket?accessToken=${encodeURIComponent(token)}&version=${encodeURIComponent(version)}`;
 
-  const options = {};
-  if (proxy) {
-    options.agent = new HttpsProxyAgent(proxy);
-  }
-
-  socket = new WebSocket(wsUrl, options);
+  socket = new WebSocket(wsUrl);
 
   socket.onopen = async () => {
     const connectionTime = new Date().toISOString();
@@ -92,7 +85,7 @@ async function connectWebSocket(token, proxy) {
     console.log("WebSocket disconnected");
     stopPinging();
     const delay = Math.min(1000 * 2 ** reconnectAttempts, 30000);
-    setTimeout(() => connectWebSocket(token, proxy), delay);
+    setTimeout(() => connectWebSocket(token), delay);
     reconnectAttempts++;
   };
 
@@ -177,143 +170,73 @@ async function updateCountdownAndPoints() {
   await setLocalStorage({ potentialPoints, countdown });
 }
 
-async function getUserId(proxy) {
-  const loginUrl = "https://auth.teneo.pro/api/login";
-
-  rl.question('Email: ', (email) => {
-    rl.question('Password: ', async (password) => {
-      try {
-        const response = await axios.post(loginUrl, {
-          email: email,
-          password: password
-        }, {
-          headers: {
-            'x-api-key': reffCode
-          }
-        });
-
-        const access_token = response.data.access_token;
-
-        await setLocalStorage({ access_token });
-        await startCountdownAndPoints();
-        await connectWebSocket(access_token, proxy);
-      } catch (error) {
-        console.error('Error:', error.response ? error.response.data : error.message);
-      } finally {
-        rl.close();
-      }
-    });
-  });
+async function getAccountCredentials() {
+  try {
+    const data = await readFileAsync('accounts.txt', 'utf8');
+    const [email, password] = data.split('|');
+    return { email: email.trim(), password: password.trim() };
+  } catch (error) {
+    console.error('Error reading accounts.txt:', error.message);
+    process.exit(1);
+  }
 }
 
-async function registerUser() {
-  const isExistUrl = 'https://auth.teneo.pro/api/check-user-exists';
-  const signupUrl = "https://node-b.teneo.pro/auth/v1/signup";
+async function getUserId() {
+  const loginUrl = "https://auth.teneo.pro/api/login";
 
-  rl.question('Enter your email: ', (email) => {
-    rl.question('Enter your password: ', (password) => {
-      rl.question('Enter invited_by code: ', async (invitedBy) => {
-        try {
-          const isExist = await axios.post(isExistUrl, { email: email }, {
-            headers: {
-              'x-api-key': reffCode
-            }
-          });
-
-          if (isExist && isExist.data && isExist.data.exists) {
-            console.log('User already exists, please just login with:', email);
-            return;
-          } else {
-            const response = await axios.post(signupUrl, {
-              email: email,
-              password: password,
-              data: { invited_by: invitedBy },
-              gotrue_meta_security: {},
-              code_challenge: null,
-              code_challenge_method: null
-            }, {
-              headers: {
-                'apikey': auth,
-                'Content-Type': 'application/json',
-                'authorization': `Bearer ${auth}`,
-                'x-client-info': 'supabase-js-web/2.47.10',
-                'x-supabase-api-version': '2024-01-01',
-              }
-            });
-          }
-
-          console.log('Registration successful Please Confirm your email at :', email);
-        } catch (error) {
-          console.error('Error during registration:', error.response ? error.response.data : error.message);
-        } finally {
-          rl.close();
-        }
-      });
+  try {
+    const { email, password } = await getAccountCredentials();
+    const response = await axios.post(loginUrl, {
+      email: email,
+      password: password
+    }, {
+      headers: {
+        'x-api-key': reffCode
+      }
     });
-  });
+
+    const access_token = response.data.access_token;
+
+    await setLocalStorage({ access_token });
+    await startCountdownAndPoints();
+    await connectWebSocket(access_token);
+  } catch (error) {
+    console.error('Error:', error.response ? error.response.data : error.message);
+    process.exit(1);
+  }
 }
 
 async function main() {
   const localStorageData = await getLocalStorage();
   let access_token = localStorageData.access_token;
 
-  rl.question('Do you want to use a proxy? (y/n): ', async (useProxy) => {
-    let proxy = null;
-    if (useProxy.toLowerCase() === 'y') {
-      proxy = await new Promise((resolve) => {
-        rl.question('Please enter your proxy URL (e.g., http://username:password@host:port): ', (inputProxy) => {
-          resolve(inputProxy);
-        });
-      });
-    }
-
-    if (!access_token) {
-      rl.question('User ID not found. Would you like to:\n1. Register an account\n2. Login to your account\n3. Enter Token manually\nChoose an option: ', async (option) => {
-        switch (option) {
-          case '1':
-            await registerUser();
-            break;
-          case '2':
-            await getUserId(proxy);
-            break;
-          case '3':
-            rl.question('Please enter your access token: ', async (accessToken) => {
-              userToken = accessToken;
-              await setLocalStorage({ userToken });
-              await startCountdownAndPoints();
-              await connectWebSocket(userToken, proxy);
-              rl.close();
-            });
-            break;
-          default:
-            console.log('Invalid option. Exiting...');
-            process.exit(0);
-        }
-      });
-    } else {
-      rl.question('Menu:\n1. Logout\n2. Start Running Node\nChoose an option: ', async (option) => {
-        switch (option) {
-          case '1':
-            fs.unlink('localStorage.json', (err) => {
-              if (err) {
-                console.error('Error deleting localStorage.json:', err.message);
-              } else {
-                console.log('Logged out successfully.');
-                process.exit(0);
-              }
-            });
-            break;
-          case '2':
-            await startCountdownAndPoints();
-            await connectWebSocket(access_token, proxy);
-            break;
-          default:
-            console.log('Invalid option. Exiting...');
-            process.exit(0);
-        }
-      });
-    }
-  });
+  if (!access_token) {
+    console.log('User ID not found. Logging in with accounts.txt credentials...');
+    await getUserId();
+  } else {
+    rl.question('Menu:\n1. Logout\n2. Start Running Node\nChoose an option: ', async (option) => {
+      switch (option) {
+        case '1':
+          fs.unlink('localStorage.json', (err) => {
+            if (err) {
+              console.error('Error deleting localStorage.json:', err.message);
+            } else {
+              console.log('Logged out successfully.');
+              process.exit(0);
+            }
+          });
+          break;
+        case '2':
+          await startCountdownAndPoints();
+          await connectWebSocket(access_token);
+          break;
+        default:
+          console.log('Invalid option. Exiting...');
+          process.exit(0);
+      }
+    });
+  }
 }
-//run
+
+// Run the script
 main();
